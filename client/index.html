@@ -128,7 +128,9 @@
             }
         }
 
-        const ws = new WebSocket('ws://localhost:3000');
+        //const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`wss://zumbral.onrender.com`);
+        //const ws = new WebSocket('ws://zumbral.onrender.com:3000');
         let playerId;
 
         ws.onmessage = (event) => {
