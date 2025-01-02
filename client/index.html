@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Zumbral</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #111;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #status {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial;
+        }
+
+        #gameOver {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: red;
+            font-size: 48px;
+            font-family: Arial;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="status">HP: 100</div>
+    <div id="gameOver">GAME OVER</div>
+    <canvas id="gameCanvas"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+        const gameOver = document.getElementById('gameOver');
+
+        // Game boundaries
+        const GAME_WIDTH = 800;
+        const GAME_HEIGHT = 600;
+
+        canvas.width = GAME_WIDTH;
+        canvas.height = GAME_HEIGHT;
+
+        const state = {
+            players: new Map(),
+            zombies: [],
+            bullets: []
+        };
+
+        class Player {
+            constructor(id, x, y) {
+                this.id = id;
+                this.x = Math.min(Math.max(x, 0), GAME_WIDTH);
+                this.y = Math.min(Math.max(y, 0), GAME_HEIGHT);
+                this.health = 100;
+                this.speed = 5;
+                this.size = 20;
+                this.color = '#' + Math.floor(Math.random() * 16777215).toString(16);
+                this.isDead = false;
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size);
+            }
+
+            move(dx, dy) {
+                this.x = Math.min(Math.max(this.x + dx, this.size / 2), GAME_WIDTH - this.size / 2);
+                this.y = Math.min(Math.max(this.y + dy, this.size / 2), GAME_HEIGHT - this.size / 2);
+            }
+        }
+
+        class Zombie {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.speed = 2;
+                this.size = 20;
+            }
+
+            draw() {
+                ctx.fillStyle = '#8B0000';
+                ctx.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size);
+            }
+
+            update(target) {
+                const dx = target.x - this.x;
+                const dy = target.y - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist > 0) {
+                    this.x += (dx / dist) * this.speed;
+                    this.y += (dy / dist) * this.speed;
+                }
+            }
+        }
+
+        class Bullet {
+            constructor(x, y, angle) {
+                this.x = x;
+                this.y = y;
+                this.speed = 10;
+                this.angle = angle;
+            }
+
+            draw() {
+                ctx.fillStyle = '#FFD700';
+                ctx.beginPath();
+                //ctx.arc(this.x, this.y, 0, Math.PI * 2);
+                ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            update() {
+                this.x += Math.cos(this.angle) * this.speed;
+                this.y += Math.sin(this.angle) * this.speed;
+            }
+        }
+
+        const ws = new WebSocket('ws://localhost:3000');
+        let playerId;
+
+        ws.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+
+            switch (message.type) {
+                case 'init':
+                    playerId = message.id;
+                    state.players.set(playerId, new Player(playerId, GAME_WIDTH / 2, GAME_HEIGHT / 2));
+                    break;
+
+                case 'playerUpdate':
+                    if (message.id !== playerId) {
+                        if (!state.players.has(message.id)) {
+                            state.players.set(message.id, new Player(message.id, message.x, message.y));
+                        }
+                        const player = state.players.get(message.id);
+                        player.x = message.x;
+                        player.y = message.y;
+                        player.health = message.health;
+                    }
+                    break;
+
+                case 'zombieSpawn':
+                    state.zombies.push(new Zombie(message.x, message.y));
+                    break;
+
+                case 'playerDeath':
+                    if (message.id === playerId) {
+                        gameOver.style.display = 'block';
+                        ws.close();
+                    } else {
+                        state.players.delete(message.id);
+                    }
+                    break;
+            }
+        };
+
+        const keys = {};
+        window.addEventListener('keydown', e => keys[e.key] = true);
+        window.addEventListener('keyup', e => keys[e.key] = false);
+
+        canvas.addEventListener('click', (e) => {
+            const player = state.players.get(playerId);
+            if (player && !player.isDead) {
+                const angle = Math.atan2(
+                    e.clientY - player.y,
+                    e.clientX - player.x
+                );
+                state.bullets.push(new Bullet(player.x, player.y, angle));
+            }
+        });
+
+        function gameLoop() {
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+            // Draw game boundary
+            ctx.strokeStyle = '#333';
+            ctx.strokeRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+            const player = state.players.get(playerId);
+            if (player && !player.isDead) {
+                if (keys['w']) player.move(0, -player.speed);
+                if (keys['s']) player.move(0, player.speed);
+                if (keys['a']) player.move(-player.speed, 0);
+                if (keys['d']) player.move(player.speed, 0);
+
+                ws.send(JSON.stringify({
+                    type: 'playerUpdate',
+                    id: playerId,
+                    x: player.x,
+                    y: player.y,
+                    health: player.health
+                }));
+
+                status.textContent = `HP: ${player.health}`;
+
+                if (player.health <= 0 && !player.isDead) {
+                    player.isDead = true;
+                    ws.send(JSON.stringify({
+                        type: 'playerDeath',
+                        id: playerId
+                    }));
+                    gameOver.style.display = 'block';
+                    ws.close();
+                }
+            }
+
+            for (const player of state.players.values()) {
+                player.draw();
+            }
+
+            state.zombies.forEach((zombie, index) => {
+                if (player && !player.isDead) {
+                    zombie.update(player);
+
+                    const dx = zombie.x - player.x;
+                    const dy = zombie.y - player.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < (zombie.size + player.size) / 2) {
+                        player.health -= 1;
+                    }
+                }
+                zombie.draw();
+            });
+
+            state.bullets = state.bullets.filter(bullet => {
+                bullet.update();
+                bullet.draw();
+
+                state.zombies = state.zombies.filter(zombie => {
+                    const dx = bullet.x - zombie.x;
+                    const dy = bullet.y - zombie.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    return dist >= zombie.size / 2;
+                });
+
+                return bullet.x > 0 && bullet.x < GAME_WIDTH &&
+                    bullet.y > 0 && bullet.y < GAME_HEIGHT;
+            });
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+    </script>
+</body>
+
+</html>
